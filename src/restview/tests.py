@@ -11,6 +11,7 @@ except ImportError:
     from io import StringIO
 
 from mock import Mock, patch
+import docutils.utils
 
 from restview.restviewhttp import (MyRequestHandler, RestViewer,
                                    get_host_name, launch_browser, main)
@@ -41,19 +42,26 @@ class MyRequestHandlerForTests(MyRequestHandler):
         self._headers = {}
         self.log = []
         self.server = Mock()
-        self.server.renderer.rest_to_html = lambda data, mtime=None: \
+        self.server.renderer.command = None
+        self.server.renderer.watch = None
+        self.server.renderer.rest_to_html = lambda data, mtime=None, filename=None: \
             unicode('HTML for %s with AJAX poller for %s' % (data, mtime))
-        self.server.renderer.render_exception = lambda title, error, source: \
+        self.server.renderer.render_exception = lambda title, error, source, mtime=None: \
             unicode('HTML for error %s: %s: %s' % (title, error, source))
+
     def send_response(self, status):
         self.status = status
+
     def send_header(self, header, value):
         self._headers[header] = value
+
     def end_headers(self):
         self.headers = self._headers
+
     def send_error(self, status, body):
         self.status = status
         self.error_body = body
+
     def log_error(self, message, *args):
         if args:
             message = message % args
@@ -89,7 +97,7 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.path = '/a.txt'
         handler.server.renderer.root = self.filepath('file.txt')
-        handler.handle_rest_file = lambda fn: 'HTML for %s' % fn
+        handler.handle_rest_file = lambda fn, watch=None: 'HTML for %s' % fn
         handler.wfile = StringIO()
         handler.do_GET()
         self.assertEqual(handler.wfile.getvalue(),
@@ -99,7 +107,7 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.path = '/a.txt'
         handler.server.renderer.root = self.filepath('file.txt')
-        handler.handle_rest_file = lambda fn: 'HTML for %s' % fn
+        handler.handle_rest_file = lambda fn, watch=None: 'HTML for %s' % fn
         handler.wfile = StringIO()
         handler.do_HEAD()
         self.assertEqual(handler.wfile.getvalue(), '')
@@ -109,7 +117,7 @@ class TestMyRequestHandler(unittest.TestCase):
         handler.path = '/'
         handler.server.renderer.root = self.filepath('file.txt')
         handler.server.renderer.command = None
-        handler.handle_rest_file = lambda fn: 'HTML for %s' % fn
+        handler.handle_rest_file = lambda fn, watch=None: 'HTML for %s' % fn
         with patch('os.path.isdir', lambda dir: False):
             body = handler.do_GET_or_HEAD()
         self.assertEqual(body, 'HTML for %s' % self.filepath('file.txt'))
@@ -138,7 +146,7 @@ class TestMyRequestHandler(unittest.TestCase):
         handler.path = '/'
         handler.server.renderer.root = None
         handler.server.renderer.command = 'cat README.rst'
-        handler.handle_command = lambda cmd: 'Output of %s' % cmd
+        handler.handle_command = lambda cmd, watch: 'Output of %s' % cmd
         body = handler.do_GET_or_HEAD()
         self.assertEqual(body, 'Output of cat README.rst')
 
@@ -146,7 +154,7 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.path = '/polling?pathname=a.txt&mtime=12345'
         handler.server.renderer.root = self.root
-        handler.handle_polling = lambda fn, mt: 'Got update for %s since %s' % (fn, mt)
+        handler.handle_polling = lambda fns, mt: 'Got update for %s since %s' % (','.join(fns), mt)
         with patch('os.path.isdir', lambda dir: dir == self.root):
             body = handler.do_GET_or_HEAD()
         expected_fn = self.filepath('a.txt')
@@ -156,10 +164,29 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.path = '/polling?pathname=/&mtime=12345'
         handler.server.renderer.root = self.filepath('a.txt')
-        handler.handle_polling = lambda fn, mt: 'Got update for %s since %s' % (fn, mt)
+        handler.handle_polling = lambda fns, mt: 'Got update for %s since %s' % (','.join(fns), mt)
         body = handler.do_GET_or_HEAD()
         expected_fn = self.filepath('a.txt')
         self.assertEqual(body, 'Got update for %s since 12345' % expected_fn)
+
+    def test_do_GET_or_HEAD_polling_of_command_with_watch_files(self):
+        handler = MyRequestHandlerForTests()
+        handler.path = '/polling?pathname=/&mtime=12345'
+        handler.server.renderer.command = 'python setup.py --long-description'
+        handler.server.renderer.watch = ['setup.py', 'README.rst']
+        handler.handle_polling = lambda fns, mt: 'Got update for %s since %s' % (','.join(fns), mt)
+        body = handler.do_GET_or_HEAD()
+        self.assertEqual(body, 'Got update for setup.py,README.rst since 12345')
+
+    def test_do_GET_or_HEAD_polling_of_root_with_watch_files(self):
+        handler = MyRequestHandlerForTests()
+        handler.path = '/polling?pathname=/&mtime=12345'
+        handler.server.renderer.root = self.filepath('a.txt')
+        handler.server.renderer.watch = ['my.css']
+        handler.handle_polling = lambda fns, mt: 'Got update for %s since %s' % (','.join(fns), mt)
+        body = handler.do_GET_or_HEAD()
+        expected_fn = self.filepath('a.txt')
+        self.assertEqual(body, 'Got update for %s,my.css since 12345' % expected_fn)
 
     def test_do_GET_or_HEAD_prevent_sandbox_climbing_attacks(self):
         handler = MyRequestHandlerForTests()
@@ -174,6 +201,7 @@ class TestMyRequestHandler(unittest.TestCase):
                                 ('a.gif', 'image/gif'),
                                 ('a.jpg', 'image/jpeg'),
                                 ('a.jpeg', 'image/jpeg'),
+                                ('a.svg', 'image/svg+xml'),
                                 ('favicon.ico', 'image/x-icon')]:
             handler = MyRequestHandlerForTests()
             handler.path = '/' + filename
@@ -188,7 +216,7 @@ class TestMyRequestHandler(unittest.TestCase):
             handler = MyRequestHandlerForTests()
             handler.path = '/' + filename
             handler.server.renderer.root = self.filepath('file.txt')
-            handler.handle_rest_file = lambda fn: 'HTML for %s' % fn
+            handler.handle_rest_file = lambda fn, watch=None: 'HTML for %s' % fn
             body = handler.do_GET_or_HEAD()
             self.assertEqual(body, 'HTML for %s' % self.filepath(filename))
 
@@ -206,7 +234,7 @@ class TestMyRequestHandler(unittest.TestCase):
         with patch('time.sleep') as sleep:
             stat = {filename: [Mock(st_mtime=123455), Mock(st_mtime=123456)]}
             with patch('os.stat', lambda fn: stat[fn].pop(0)):
-                handler.handle_polling(filename, 123455)
+                handler.handle_polling([filename], 123455)
             sleep.assert_called_once_with(0.2)
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.headers['Cache-Control'],
@@ -219,9 +247,11 @@ class TestMyRequestHandler(unittest.TestCase):
         filename = os.path.join(os.path.dirname(__file__), '__init__.py')
         stat = {filename: [Mock(st_mtime=123456)]}
         with patch('os.stat', lambda fn: stat[fn].pop(0)):
-            handler.handle_polling(filename, 123455)
-        self.assertEqual(handler.log,
-             ['connection reset by peer (client closed "/polling?pathname=__init__.py&mtime=123455" before acknowledgement)'])
+            handler.handle_polling([filename], 123455)
+        self.assertEqual(
+            handler.log,
+            ['connection reset by peer'
+             ' (client closed "%s" before acknowledgement)' % handler.path])
 
     def test_handle_polling_handles_disappearing_files(self):
         handler = MyRequestHandlerForTests()
@@ -231,7 +261,7 @@ class TestMyRequestHandler(unittest.TestCase):
                                self._raise_oserror,
                                lambda: Mock(st_mtime=123456)]}
             with patch('os.stat', lambda fn: stat[fn].pop(0)()):
-                handler.handle_polling(filename, 123455)
+                handler.handle_polling([filename], 123455)
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.headers['Cache-Control'],
                          "no-cache, no-store, max-age=0")
@@ -297,6 +327,21 @@ class TestMyRequestHandler(unittest.TestCase):
         self.assertTrue(body.startswith(b'HTML for'))
         self.assertTrue(body.endswith(('with AJAX poller for %s' % mtime).encode()))
 
+    def test_handle_rest_file_extra_watch(self):
+        handler = MyRequestHandlerForTests()
+        filename = os.path.join(os.path.dirname(__file__), '__init__.py')
+        mtime = os.stat(filename).st_mtime
+        with patch('os.stat', lambda fn: {filename: Mock(st_mtime=mtime),
+                                          'my.css': Mock(st_mtime=mtime + 1)}[fn]):
+            body = handler.handle_rest_file(filename, watch=['my.css'])
+        self.assertEqual(handler.status, 200)
+        self.assertTrue(body.endswith(('with AJAX poller for %s' % (mtime + 1)).encode()))
+        with patch('os.stat', lambda fn: {filename: Mock(st_mtime=mtime),
+                                          'my.css': Mock(st_mtime=mtime - 1)}[fn]):
+            body = handler.handle_rest_file(filename, watch=['my.css'])
+        self.assertEqual(handler.status, 200)
+        self.assertTrue(body.endswith(('with AJAX poller for %s' % mtime).encode()))
+
     def test_handle_rest_file_error(self):
         handler = MyRequestHandlerForTests()
         handler.path = '/nosuchfile.txt'
@@ -305,7 +350,7 @@ class TestMyRequestHandler(unittest.TestCase):
         self.assertEqual(handler.error_body,
                          "File not found: /nosuchfile.txt")
         self.assertEqual(handler.log,
-             ["[Errno 2] No such file or directory: 'nosuchfile.txt'"])
+                         ["[Errno 2] No such file or directory: 'nosuchfile.txt'"])
 
     def test_handle_command(self):
         handler = MyRequestHandlerForTests()
@@ -333,6 +378,22 @@ class TestMyRequestHandler(unittest.TestCase):
                          str(len(body)))
         self.assertEqual(handler.headers['Cache-Control'],
                          "no-cache, no-store, max-age=0")
+        self.assertFalse('X-Restview-Mtime' in handler.headers)
+        self.assertTrue(b'cat: README.rst: no such file' in body,
+                        body)
+
+    def test_handle_command_returns_error_with_watch_files(self):
+        handler = MyRequestHandlerForTests()
+        with patch('subprocess.Popen', PopenStub('', 'cat: README.rst: no such file', 1)):
+            body = handler.handle_command('cat README.rst', watch=['README.rst'])
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(handler.headers['Content-Type'],
+                         "text/html; charset=UTF-8")
+        self.assertEqual(handler.headers['Content-Length'],
+                         str(len(body)))
+        self.assertEqual(handler.headers['Cache-Control'],
+                         "no-cache, no-store, max-age=0")
+        self.assertTrue('X-Restview-Mtime' in handler.headers)
         self.assertTrue(b'cat: README.rst: no such file' in body,
                         body)
 
@@ -369,9 +430,9 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.collect_files = lambda dir: ['a.txt', 'b/c.txt']
         handler.render_dir_listing = lambda title, files: \
-                unicode("<title>%s</title>\n%s" % (
-                    title,
-                    '\n'.join('%s - %s' % (path, fn) for path, fn in files)))
+            unicode("<title>%s</title>\n%s" % (
+                title,
+                '\n'.join('%s - %s' % (path, fn) for path, fn in files)))
         body = handler.handle_dir('/path/to/dir')
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.headers['Content-Type'],
@@ -388,9 +449,9 @@ class TestMyRequestHandler(unittest.TestCase):
         handler = MyRequestHandlerForTests()
         handler.collect_files = lambda dir: ['a.txt', os.path.join('b', 'c.txt')]
         handler.render_dir_listing = lambda title, files: \
-                unicode("<title>%s</title>\n%s" % (
-                    title,
-                    '\n'.join('%s - %s' % (path, fn) for path, fn in files)))
+            unicode("<title>%s</title>\n%s" % (
+                title,
+                '\n'.join('%s - %s' % (path, fn) for path, fn in files)))
         with patch('os.path.isdir', lambda fn: fn == 'subdir'):
             body = handler.handle_list([os.path.normpath('/path/to/file.txt'),
                                         'subdir'])
@@ -403,8 +464,7 @@ class TestMyRequestHandler(unittest.TestCase):
                          b"<title>RST files</title>\n"
                          b"0/file.txt - #path#to#file.txt\n"
                          b"1/a.txt - subdir#a.txt\n"
-                         b"1/b/c.txt - subdir#b#c.txt"
-                            .replace(b"#", os.path.sep.encode()))
+                         b"1/b/c.txt - subdir#b#c.txt".replace(b"#", os.path.sep.encode()))
 
 
 def doctest_MyRequestHandler_render_dir_listing():
@@ -437,7 +497,7 @@ def doctest_RestViewer_rest_to_html():
     """Test for RestViewer.rest_to_html
 
         >>> viewer = RestViewer('.')
-        >>> print(viewer.rest_to_html('''
+        >>> print(viewer.rest_to_html(b'''
         ... example
         ... -------
         ...
@@ -457,6 +517,7 @@ def doctest_RestViewer_rest_to_html():
         ...
         ... This is an inline literal: ``README.txt``.
         ... ''', settings={'cloak_email_addresses': True}).strip())
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
         <?xml version="1.0" encoding="utf-8" ?>
         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
         <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
@@ -465,13 +526,10 @@ def doctest_RestViewer_rest_to_html():
         ...
         <title>example</title>
         <style type="text/css">
-        <BLANKLINE>
-        /*
-         * Stylesheet for ReStructuredText by Marius Gedminas.
-         * (I didn't like the default one)
         ...
-        </style>
-        <style type="text/css">
+        /*
+         * Stylesheet overrides for ReSTview
+         */
         ...
         </style>
         </head>
@@ -508,10 +566,11 @@ def doctest_RestViewer_rest_to_html_css_url():
     means it's hard to override them!
 
         >>> viewer = RestViewer('.')
-        >>> viewer.css_url = 'http://example.com/my.css'
-        >>> print(viewer.rest_to_html('''
+        >>> viewer.stylesheets = 'http://example.com/my.css'
+        >>> print(viewer.rest_to_html(b'''
         ... Some text
         ... ''').strip())
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
         <?xml version="1.0" encoding="utf-8" ?>
         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
         <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
@@ -543,23 +602,19 @@ def doctest_RestViewer_rest_to_html_strict_and_error_handling():
         >>> stderr = stderr_patcher.start()
 
         >>> viewer = RestViewer('.')
-        >>> viewer.css_path = viewer.css_url = None
+        >>> viewer.stylesheets = None
         >>> viewer.strict = True
-        >>> print(viewer.rest_to_html('''
+        >>> print(viewer.rest_to_html(b'''
         ... Some text with an `error
-        ... ''').strip())
+        ... ''', mtime=1364808683).strip())
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
         <!DOCTYPE html>
         <html>
         <head>
         <title>SystemMessage</title>
         <style type="text/css">
         pre.error {
-            border-left: 3px double red;
-            margin-left: 19px;
-            padding-left: 19px;
-            padding-top: 10px;
-            padding-bottom: 10px;
-            color: red;
+            ...
         }
         </style>
         </head>
@@ -573,10 +628,102 @@ def doctest_RestViewer_rest_to_html_strict_and_error_handling():
         Some text with an `error
         <BLANKLINE>
         </pre>
+        <BLANKLINE>
+        <script type="text/javascript">
+        var mtime = '1364808683';
+        ...
+        </script>
         </body>
         </html>
 
         >>> stderr_patcher.stop()
+
+    """
+
+
+def doctest_RestViewer_rest_to_html_pypi_strict_and_error_handling():
+    """Test for RestViewer.rest_to_html in --pypi-strict mode
+
+        >>> stderr_patcher = patch('sys.stderr', StringIO())
+        >>> stderr = stderr_patcher.start()
+
+        >>> viewer = RestViewer('.')
+        >>> viewer.stylesheets = None
+        >>> viewer.pypi_strict = True
+        >>> print(viewer.rest_to_html(b'''
+        ... Hello
+        ... -----
+        ...
+        ... .. include:: /etc/passwd
+        ...
+        ... ''').strip().replace("&quot;", '"'))
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <title>SystemMessage</title>
+        <style type="text/css">
+        pre.error {
+            ...
+        }
+        </style>
+        </head>
+        <body>
+        <h1>SystemMessage</h1>
+        <pre class="error">
+        &lt;string&gt;:5: (WARNING/2) "include" directive disabled.
+        </pre>
+        <pre>
+        <BLANKLINE>
+        Hello
+        -----
+        <BLANKLINE>
+        .. include:: /etc/passwd
+        <BLANKLINE>
+        <BLANKLINE>
+        </pre>
+        </body>
+        </html>
+
+        >>> stderr_patcher.stop()
+
+    """
+
+
+def doctest_RestViewer_rest_to_html_pypi_strict():
+    """Test for RestViewer.rest_to_html in --pypi-strict mode
+
+        >>> stderr_patcher = patch('sys.stderr', StringIO())
+
+        >>> viewer = RestViewer('.')
+        >>> viewer.stylesheets = None
+        >>> viewer.pypi_strict = True
+        >>> print(viewer.rest_to_html(b'''
+        ... Hello
+        ... -----
+        ...
+        ... `This is fine <http://www.example.com>`__.
+        ...
+        ... ''').strip().replace("&quot;", '"'))
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
+        <?xml version="1.0" encoding="utf-8" ?>
+        <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+        <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+        <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+        ...
+        <title>Hello</title>
+        <style type="text/css">
+        ...
+        </head>
+        <body>
+        <div class="document" id="hello">
+        <h1 class="title">Hello</h1>
+        <BLANKLINE>
+        <p><a href="http://www.example.com" rel="nofollow">This is fine</a>.</p>
+        </div>
+        </body>
+        </html>
 
     """
 
@@ -621,6 +768,7 @@ def doctest_RestViewer_inject_ajax_adds_ajax():
         ... </body>
         ... </html>
         ... ''', mtime=1364808683).strip())
+        ... # doctest: +ELLIPSIS,+REPORT_NDIFF
         <html>
         <head>
         <title>Title</title>
@@ -629,26 +777,8 @@ def doctest_RestViewer_inject_ajax_adds_ajax():
         <p>Some body text</p>
         <BLANKLINE>
         <script type="text/javascript">
-        var xmlHttp = null;
-        window.onload = function () {
-            setTimeout(function () {
-                if (window.XMLHttpRequest) {
-                    xmlHttp = new XMLHttpRequest();
-                } else if (window.ActiveXObject) {
-                    xmlHttp = new ActiveXObject('Microsoft.XMLHTTP');
-                }
-                xmlHttp.onreadystatechange = function () {
-                    if (xmlHttp.readyState == 4 && xmlHttp.status == '200') {
-                        window.location.reload(true);
-                    }
-                }
-                xmlHttp.open('HEAD', '/polling?pathname=' + location.pathname + '&mtime=1364808683', true);
-                xmlHttp.send(null);
-            }, 0);
-        }
-        window.onbeforeunload = function () {
-            xmlHttp.abort();
-        }
+        var mtime = '1364808683';
+        ...
         </script>
         </body>
         </html>
@@ -662,7 +792,98 @@ class TestRestViewer(unittest.TestCase):
         viewer = RestViewer('.')
         viewer.server = Mock()
         viewer.serve()
-        viewer.server.serve_forever.assert_called_once()
+        self.assertEqual(viewer.server.serve_forever.call_count, 1)
+
+    def test_rest_to_html_halt_level(self):
+        viewer = RestViewer('.')
+        viewer.halt_level = 2
+        html = viewer.rest_to_html(b'`Hello')
+        self.assertIn('<title>SystemMessage</title>', html)
+
+    def make_error(self, msg, source='file.rst', line=None,
+                   level=docutils.utils.Reporter.ERROR_LEVEL):
+        sm = docutils.nodes.system_message(
+            msg, level=level, type=docutils.utils.Reporter.levels[level],
+            source=source, line=line)
+        return docutils.utils.SystemMessage(sm, level)
+
+    def test_docutils_exception_messages(self):
+        err = self.make_error('dangling participle', 'file.rst', 42)
+        # Let's make sure docutils hasn't changed their error format.
+        self.assertEqual(str(err), 'file.rst:42: (ERROR/3) dangling participle')
+
+    def test_docutils_exception_messages_no_source_path(self):
+        err = self.make_error('dangling participle', None, 42)
+        # Let's make sure docutils hasn't changed their error format.
+        self.assertEqual(str(err), 'None:42: (ERROR/3) dangling participle')
+
+    def test_extract_line_info(self):
+        eli = RestViewer.extract_line_info
+        err = self.make_error('dangling participle', 'file.rst', 42)
+        self.assertEqual(eli(err, 'file.rst'), 42)
+
+    def test_extract_line_unknown_file(self):
+        eli = RestViewer.extract_line_info
+        err = self.make_error('dangling participle', None, 42)
+        self.assertEqual(eli(err, None), 42)
+
+    def test_extract_line_info_wrong_file(self):
+        eli = RestViewer.extract_line_info
+        err = self.make_error('dangling participle', 'file.rst', 42)
+        self.assertEqual(eli(err, 'unrelated.rst'), None)
+
+    def test_extract_line_info_other_kind_of_exception(self):
+        eli = RestViewer.extract_line_info
+        err = KeyboardInterrupt()
+        self.assertEqual(eli(err, 'file.rst'), None)
+
+    def test_highlight_line_no_line(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(hl(source, None),
+                         'line &lt;1&gt;\nline &lt;2&gt;\nline &lt;3&gt;\n')
+
+    def test_highlight_line_beyond_eof(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(hl(source, 42),
+                         'line &lt;1&gt;\nline &lt;2&gt;\nline &lt;3&gt;\n')
+
+    def test_highlight_line_before_bof(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(hl(source, 0),
+                         'line &lt;1&gt;\nline &lt;2&gt;\nline &lt;3&gt;\n')
+
+    def test_highlight_line_first(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(
+            hl(source, 1),
+            '<span class="highlight">line &lt;1&gt;\n</span>'
+            'line &lt;2&gt;\n'
+            'line &lt;3&gt;\n'
+        )
+
+    def test_highlight_line_middle(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(
+            hl(source, 2),
+            'line &lt;1&gt;\n'
+            '<span class="highlight">line &lt;2&gt;\n</span>'
+            'line &lt;3&gt;\n'
+        )
+
+    def test_highlight_line_last(self):
+        hl = RestViewer.highlight_line
+        source = 'line <1>\nline <2>\nline <3>\n'
+        self.assertEqual(
+            hl(source, 3),
+            'line &lt;1&gt;\n'
+            'line &lt;2&gt;\n'
+            '<span class="highlight">line &lt;3&gt;\n</span>'
+        )
 
 
 class TestGlobals(unittest.TestCase):
@@ -679,7 +900,7 @@ class TestGlobals(unittest.TestCase):
             Thread.assert_called_once_with(target=webbrowser.open,
                                            args=('http://example.com',))
             Thread.return_value.setDaemon.assert_called_once_with(True)
-            Thread.return_value.start.assert_called_once()
+            self.assertEqual(Thread.return_value.start.call_count, 1)
 
 
 class TestMain(unittest.TestCase):
@@ -711,26 +932,25 @@ class TestMain(unittest.TestCase):
                             if serve_called:
                                 self.assertTrue(self._serve_called)
                             if browser_launched:
-                                launch_browser.assert_called_once()
+                                self.assertEqual(launch_browser.call_count, 1)
                             return stdout.getvalue(), stderr.getvalue()
 
     def test_help(self):
         stdout, stderr = self.run_main('--help')
-        self.assertTrue('restview [options] filename-or-directory' in stdout,
-                        stdout)
+        self.assertTrue('restview [options] root' in stdout, stdout)
 
     def test_error_when_no_arguments(self):
         stdout, stderr = self.run_main(rc=2)
         self.assertEqual(stderr.splitlines()[-1],
-             'restview: error: at least one argument expected')
+                         'restview: error: at least one argument expected')
 
     def test_error_when_both_command_and_file_specified(self):
         stdout, stderr = self.run_main('-e', 'cat README.rst', 'CHANGES.rst',
                                        rc=2)
-        self.assertEqual(stderr.splitlines()[-1],
-             'restview: error: specify a command (-e) or a file/directory,'
-             ' but not both',
-             stderr)
+        self.assertEqual(
+            stderr.splitlines()[-1],
+            'restview: error: specify a command (-e) or a file/directory, but not both',
+            stderr)
 
     def test_all_is_well(self):
         self.run_main('.', serve_called=True, browser_launched=True)
@@ -747,12 +967,12 @@ class TestMain(unittest.TestCase):
         with patch.object(RestViewer, 'listen'):
             with patch.object(RestViewer, 'close'):
                 self.run_main('-l', '0.0.0.0:8080', '.',
-                            serve_called=True, browser_launched=True)
+                              serve_called=True, browser_launched=False)
 
     def test_specify_invalid_listen_address(self):
         stdout, stderr = self.run_main('-l', 'nonsense', '.', rc=2)
         self.assertEqual(stderr.splitlines()[-1],
-             'restview: error: Invalid address: nonsense')
+                         'restview: error: Invalid address: nonsense')
 
     def test_custom_css_url(self):
         self.run_main('.', '--css', 'http://example.com/my.css',

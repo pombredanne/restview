@@ -1,8 +1,171 @@
 Changelog
 =========
 
-2.0.5 (unreleased)
+2.7.0 (unreleased)
 ------------------
+
+- New option ``--halt-level`` (`#44
+  <https://github.com/mgedmin/restview/pull/44>`_), contributed by Kunshan
+  Wang.
+
+
+2.6.1 (2016-01-05)
+------------------
+
+- The ``readme`` dependency was renamed ``readme_renderer`` (fixes
+  `#30 <https://github.com/mgedmin/restview/issues/30>`_,
+  `#41 <https://github.com/mgedmin/restview/issues/41>`_).
+
+
+2.6.0 (2015-12-31)
+------------------
+
+- Implement ``restview --version`` (`#37
+  <https://github.com/mgedmin/restview/issues/37>`_).
+
+- Highlight the bad source line when rendering fails completely due to an
+  error, e.g. in ``--strict`` mode (`#40
+  <https://github.com/mgedmin/restview/issues/40>`_).
+
+
+2.5.2 (2015-11-20)
+------------------
+
+- Use the right content type for SVG images (`#36
+  <https://github.com/mgedmin/restview/issues/36>`_).
+
+
+2.5.1 (2015-11-17)
+------------------
+
+- Support SVG images (`#36 <https://github.com/mgedmin/restview/issues/36>`_).
+
+
+2.5.0 (2015-10-27)
+------------------
+
+- Fix HTML cleaning code in --pypi-strict mode (`#33
+  <https://github.com/mgedmin/restview/issues/33>`_).
+
+- Drop Python 2.6 support.
+
+- Claim Python 3.5 support.
+
+
+2.4.0 (2015-05-27)
+------------------
+
+- Drop Python 3.2 support.
+
+- Stop dynamic computation of install_requires in setup.py, this doesn't work
+  well in the presence of the pip 7 wheel cache.
+
+
+2.3.0 (2015-01-26)
+------------------
+
+- Follow PyPI's lead and rely on `readme
+  <https://pypi.python.org/pypi/readme>`__ for rendering in --pypi-strict mode.
+  Fixes https://github.com/mgedmin/restview/issues/28.
+
+
+2.2.1 (2015-01-06)
+------------------
+
+- Fix style loss on autoreloading.
+  Fixes https://github.com/mgedmin/restview/issues/25.
+
+
+2.2.0 (2014-12-10)
+------------------
+
+- Reload the page using AJAX to preserve scroll position.
+  Fixes https://github.com/mgedmin/restview/issues/22.
+
+- Use the default docutils CSS instead of replacing it wholesale.
+  Drop some of our styles, including:
+
+  - left-aligned document title
+  - sans-serif font override for document text
+  - fully-justified text
+  - bold terms in definition lists
+  - custom table rendering with just horizontal rules (issue #23)
+
+  Keep other custom style overrides:
+
+  - custom footnote rendering (I really like it)
+  - white background for code blocks
+  - prettier system error messages
+  - unified alignment of code blocks, block quotes and doctests
+
+  Fixes https://github.com/mgedmin/restview/issues/23.
+
+- The ``--css`` option can be provided multiple times and can refer to
+  standard stylesheets (the ones provided by docutils as well as the ones
+  provided by restview) without specifying the full path.
+
+  For example, if you want to go back to the style used by restview before
+  version 2.2.0, you can use ::
+
+    restview --css oldrestview.css ...
+
+  If you want your own custom style on top of the standard docutils
+  styles, use ::
+
+    restview --css html4css1.css --css ./path/to/my.css
+
+  And if you want to completely override the stylesheet, use ::
+
+    restview --css ./path/to/my.css
+
+- New option: ``--watch``.  Reloads pages when a given file changes.  Mostly
+  useful with ``-e``, but can also come in handy when you're developing your
+  CSS.  Can be specified multiple times, e.g. ::
+
+    restview --css my.css -e 'cat one.rst two.rst' -w my.css -w one.rst -w two.rst
+
+- ``restview --long-description`` watches setup.py, README.rst and CHANGES.rst
+  for updates and reloads the description automatically.
+
+- Error pages will also reload automatically if the source file changes.
+
+- Error pages in strict mode will mention the filename instead of ``<string>``.
+
+- File watching now pays attention to fractional seconds.
+
+
+2.1.1 (2014-09-28)
+------------------
+
+- Fix TypeError on Python 3 when reporting ReST errors (typically in strict
+  mode).
+  Fixes https://github.com/mgedmin/restview/issues/21.
+
+- Fix TypeError on Python 3 when using ``--pypi-strict``.
+
+
+2.1.0 (2014-09-02)
+------------------
+
+- ``--pypi-strict`` mode to catch additional problems that break rendering
+  on the Python Packaging Index.  ``--long-description`` enables this
+  automatically.
+  Fixes https://github.com/mgedmin/restview/issues/18.
+
+- Added installation section to the README.
+  Fixes https://github.com/mgedmin/restview/issues/19.
+
+
+2.0.5 (2014-06-09)
+------------------
+
+- Avoid Unicode errors on Python 3 when the ReStructuredText file is in an
+  encoding that doesn't match the locale.
+  Fixes https://github.com/mgedmin/restview/issues/16.
+
+- Avoid Unicode errors on Python 3when there are filenames in an encoding that
+  doesn't match the locale.
+  Fixes https://github.com/mgedmin/restview/issues/17.
 
 
 2.0.4 (2014-04-28)
@@ -170,4 +333,3 @@ Changelog
 ------------------
 
 - PyGtk+ version with GtkMozEmbed.  Not very stable.
-

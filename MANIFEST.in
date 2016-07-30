@@ -1,12 +1,10 @@
-include restview
 include sample.rst
-include test.py
-include src/restview/default.css
 include src/restview/favicon.ico
 include src/restview/*.xcf
+include src/restview/*.css
 include Makefile
 include *.rst
 include tox.ini
 include .coveragerc
-include .travis.yml
+include *.yml
 include .gitignore
